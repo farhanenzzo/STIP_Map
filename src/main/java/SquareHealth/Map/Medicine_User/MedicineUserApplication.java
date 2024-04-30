@@ -1,11 +1,15 @@
 package SquareHealth.Map.Medicine_User;
 
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.SignatureAlgorithm;
+import io.jsonwebtoken.security.Keys;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.NoArgsConstructor;
-import lombok.NonNull;
+import org.springframework.lang.NonNull;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -13,7 +17,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.AuthenticationProvider;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -35,6 +41,10 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.security.Key;
+import java.util.Date;
+
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -60,7 +70,7 @@ public class MedicineUserApplication {
 class BasicController {
 
 	@Autowired
-	private JwtUtil jwtUtil;
+	private JwtService jwtService;
 
 	@Autowired
 	private AuthenticationManager authenticationManager;
@@ -70,7 +80,7 @@ class BasicController {
 
 		UsernamePasswordAuthenticationToken token = new UsernamePasswordAuthenticationToken(loginRequestDTO.getUsername(), loginRequestDTO.getPassword());
 		authenticationManager.authenticate(token);
-		String jwt = jwtUtil.buildToken(loginRequestDTO.getUsername());
+		String jwt = jwtService.buildToken(loginRequestDTO.getUsername());
 		return ResponseEntity.ok(jwt);
 	}
 
@@ -98,7 +108,7 @@ class LoginRequestDTO {
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity
-class WebSecurityConfiguration{
+class SecurityConfiguration {
 
 	@Autowired
 	private JwtTokenFilter jwtTokenFilter;
@@ -115,9 +125,18 @@ class WebSecurityConfiguration{
 	}
 
 	@Bean
+	public AuthenticationProvider authenticationProvider() {
+		DaoAuthenticationProvider authenticationProvider = new DaoAuthenticationProvider();
+		authenticationProvider.setUserDetailsService(userDetailsService);
+		authenticationProvider.setPasswordEncoder(passwordEncoder);
+		return authenticationProvider;
+	}
+
+	@Bean
 	public AuthenticationManager getAuthenticationManager(AuthenticationConfiguration authenticationConfiguration) throws Exception {
 		return authenticationConfiguration.getAuthenticationManager();
 	}
+
 
 	@Bean
 	protected SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -143,7 +162,7 @@ class WebSecurityConfiguration{
 class JwtTokenFilter extends OncePerRequestFilter {
 
 	@Autowired
-	private JwtUtil jwtUtil;
+	private JwtService jwtService;
 
 	@Override
 	protected void doFilterInternal(@NonNull HttpServletRequest httpServletRequest,
@@ -151,18 +170,19 @@ class JwtTokenFilter extends OncePerRequestFilter {
 									@NonNull FilterChain filterChain) throws ServletException, IOException {
 
 		final String authorizationHeader = httpServletRequest.getHeader("Authorization");
+
 		if (authorizationHeader == null || !authorizationHeader.startsWith("Bearer")){
 			filterChain.doFilter(httpServletRequest, httpServletResponse);
 			return;
 		}
 
 		final String token = authorizationHeader.split(" ")[1].trim();
-		if (!jwtUtil.validate(token)) {
+		if (!jwtService.validate(token)) {
 			filterChain.doFilter(httpServletRequest, httpServletResponse);
 			return;
 		}
 
-		String username = jwtUtil.getUsername(token);
+		String username = jwtService.getUsername(token);
 		UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(username, null, new ArrayList<>());
 		authToken.setDetails(new WebAuthenticationDetailsSource().buildDetails(httpServletRequest));
 		SecurityContextHolder.getContext().setAuthentication(authToken);
@@ -188,5 +208,43 @@ class UserDetailsService implements org.springframework.security.core.userdetail
 		if (users.containsKey(username))
 			return new User(username, users.get(username), new ArrayList<>());
 		throw new UsernameNotFoundException(username);
+	}
+}
+
+@Service
+class JwtService {
+
+	private static final int expireInMs = 300 * 1000;
+	private final static Key key = Keys.secretKeyFor(SignatureAlgorithm.HS256);
+
+	public String buildToken(String username) {
+		return Jwts.builder()
+				.setSubject(username)
+				.setIssuer("farhan ahmed")
+				.setIssuedAt(new Date(System.currentTimeMillis()))
+				.setExpiration(new Date(System.currentTimeMillis() + expireInMs))
+				.signWith(key)
+				.compact();
+	}
+	public boolean validate(String token) {
+		return getUsername(token) != null && isExpired(token);
+	}
+
+	public String getUsername(String token) {
+		Claims claims = getClaims(token);
+		return claims.getSubject();
+	}
+
+	public boolean isExpired(String token) {
+		Claims claims = getClaims(token);
+		return claims.getExpiration().after(new Date(System.currentTimeMillis()));
+	}
+
+	private Claims getClaims(String token) {
+		return Jwts.parserBuilder()
+				.setSigningKey(key)
+				.build()
+				.parseClaimsJws(token)
+				.getBody();
 	}
 }
